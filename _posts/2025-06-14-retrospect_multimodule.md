@@ -4,8 +4,8 @@ description: >-
   멀티 모듈 설계에 관한 회고록
 author: jay
 date: 2025-06-14 20:55:00 +0800
-categories: [Gradle]
-tags: [retrospect, multi_module, geeson]
+categories: [Retrospect]
+tags: [gradle, architecture]
 pin: false
 media_subpath: ''
 ---
