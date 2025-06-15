@@ -1,5 +1,5 @@
 ---
-title: 회고록 1
+title: 멀티모듈 설계에 관하여
 description: >-
   멀티 모듈 설계에 관한 회고록
 author: jay

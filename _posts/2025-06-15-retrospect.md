@@ -1,7 +1,7 @@
 ---
-title: 회고록 2
+title: Go에 관하여
 description: >-
-  golang의 코드 구조에 대한 회고록
+  go의 코드 구조에 대한 회고록
 author: jay
 date: 2025-06-15 20:55:00 +0800
 categories: [Golang, Geeson]
@@ -25,7 +25,7 @@ var _ repository.UserRepository = (*UserRepository)(nil)
 ```
 
 자바에서는 위의 코드는 이상하게 느껴진다. repository.UserRepository는 값타입이고 *UserRepositorty는 포인터 타입이다. 그럼 값타입에 포인터를 넣는다고? 이러한 의문이 드는 것이다.
-이 의문에는 두가지 무지가 담겨져 있었다.
+이 의문에는 두가지 오해가 담겨져 있었다.
 1. Go의 특징 중 하나는 untyped nil 상수를 모든 포인터 타입(뿐만 아니라 map, slice, chan, func, interface 타입 등)으로 변환할 수 있다는 점
    - var a2 MyInterface = &b1 이런식의 구현도 가능한 것이다.(물론 아래와 같은 제약사항이 있다.)
 2. 리시버에서 해당 변수를 사용할때는 구조체 멤버를 대상의 얕은 복사가 이루어지지만 초기화시에는 주소값 대상의 얕은 복사가 이루어진다.(즉 같은 메모리를 가리킨다.)
