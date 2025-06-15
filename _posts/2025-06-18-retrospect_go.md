@@ -5,7 +5,7 @@ description: >-
 author: jay
 date: 2025-06-18 20:55:00 +0800
 categories: [Retrospect]
-tags: [golang]
+tags: [gola]
 pin: false
 media_subpath: ''
 ---
