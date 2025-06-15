@@ -3,8 +3,8 @@ title: Go에 관하여
 description: >-
   go의 코드 구조에 대한 회고록
 author: jay
-date: 2025-06-15 20:55:00 +0800
-categories: [Golang, Geeson]
+date: 2025-06-18 20:55:00 +0800
+categories: [Go]
 tags: [retrospect, golang, geeson]
 pin: false
 media_subpath: ''
