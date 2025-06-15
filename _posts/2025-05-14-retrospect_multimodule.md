@@ -3,7 +3,7 @@ title: 멀티모듈 설계에 관하여
 description: >-
   멀티 모듈 설계에 관한 회고록
 author: jay
-date: 2025-06-14 20:55:00 +0800
+date: 2025-05-14 20:55:00 +0800
 categories: [Retrospect]
 tags: [gradle, architecture]
 pin: false

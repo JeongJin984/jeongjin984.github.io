@@ -3,7 +3,7 @@ title: Go에 관하여
 description: >-
   go의 코드 구조에 대한 회고록
 author: jay
-date: 2025-06-18 20:55:00 +0800
+date: 2025-05-18 20:55:00 +0800
 categories: [Retrospect]
 tags: [gola]
 pin: false
