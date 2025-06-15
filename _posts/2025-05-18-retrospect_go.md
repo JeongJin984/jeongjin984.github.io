@@ -4,8 +4,8 @@ description: >-
   go의 코드 구조에 대한 회고록
 author: jay
 date: 2025-05-18 20:55:00 +0800
-categories: [Retrospect]
-tags: [gola]
+categories: [Retrospect, Geeson]
+tags: [golang]
 pin: false
 media_subpath: ''
 ---
