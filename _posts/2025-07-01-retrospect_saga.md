@@ -98,7 +98,7 @@ Kafka는 Http와는 다르게 응답을 기다리지 않는다. 이벤트는 발
 
 여기서 하나의 문제가 더 발생한다. 바로 보상 트랜잭션이다. 예를들어 결제가 성공하고 재고에서 실패가 발생했을 때 결제를 실패 처리 해줘야한다. 이러한 보상 트랜잭션을 섬세하게 다뤄야만 견고한 시스템을 만들 수 있다. 아래는 내가 작성한 시나리오이다.
 
-![Build source](/assets/img/retrospect_saga_img1.png){: .light .border .normal w='375' h='140' }
+![Build source](/assets/img/retrospect_saga_img1.png){: .light .border .normal .center w=600' h='200' }
 
 **Saga의 상태가 이렇게 변하는데 Saga의 상태를 어떻게 관리해야할까?** 
 
