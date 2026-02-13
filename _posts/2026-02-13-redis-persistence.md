@@ -116,59 +116,84 @@ Block A' (수정본 생성)
 
 ## AOF
 
-> 모든 WRITE 명령 로그를 작성 중인 파일 끝에 계속 추가하며 기록하는 방식
+> AOF는 Redis write 명령을 Redis protocol 형식으로 로그에 기록하는 방식이다
 
-AOF를 이해하기 위해 7.0 이전의 재작성 처리 흐름은 다음과 같습니다.(메모리 할당은 스냅숏과 마찬가지로 CoW 매커니즘을 사용) AOF 재작성 중 중간에 실패해도 문제가 없도록 현재 사용 중인 AOF파일에 지속적으로 쓰기 작업 명령이 추가됩니다. 
-또한 파일의 데이터 손실이 확인되면 기본적으로 많은 데이터를 불러오지만 무결성을 위해 오류를 만들어 서버가 실행되지 않도록 할 수 있습니다. 이 경우에는 redis-check-aof 도구를 사용하여 AOF 파일을 수정해야합니다.(aof-load-truncated 지시자를 사용해 관련 설정을 할 수 있으며 매개변수는 파일은 형식은 정상이지만 중간에 잘려있는 데이터가 있을 때 유효합니다.)
-
-1. 요청 처리 중인 프로세스에서 AOF를 재작성하기 위해 작식 프로세스 fork
-2. 자식 프로세스는 새로운 AOF 파일을 생성한 후 재작성 결과를 저장
-3. 자식 프로세스가 새로운 AOF 파일의 재작성을 완료하면 부모 프로세스에 신호를 보냄
-4. 신호를 받은 부모는 포크 이후의 쓰기 작업 내용을 AOF 재작성 버퍼에 저장했다가 자식에 전송(자식은 데이터 차이를 새롭게 생성된 AOF 파일에 반영)
-5. 오래된 AOF 파일 교체
+- 논리적 명령 기록 (물리적 redo log 아님)
+- append-only 구조 
+- 재시작 시 순차 replay
 
 스냅숏과 비슷하게 AOF 파일을 재작성할 때 4MB마다 디스크로 플러시 할 수 있습니다.(aof-rewrite-incremental-fsync로 제어)
 
-주의할 점은 ElasticCache같은 관리형 서비스를 사용할 경우 복원 효과가 없을 수 있습니다. 장애가 발생하여 노드 교체가 이루어지면 AOF 파일은 임시 저장소에 저장되므로 새로운 노드에는 파일이 없어 적용할 수 없습니다.
+### AOF Rewrite (7.0 이전)
 
-### 7.0 이후
+AOF를 이해하기 위해 7.0 이전의 재작성 처리 흐름은 다음과 같습니다.(메모리 할당은 스냅숏과 마찬가지로 CoW 매커니즘을 사용)
 
-멀티파트 AOF 기능이 도입되었습니다. 단일 AOF 파일 구조에서는 다음과 같은 문제가 발생하였습니다. 이는 파일을 정리(compact)하기 위해서 전체를 재성하기 때문으로 
+동작 흐름:
 
-```markdown
-**1. 디스크 I/O 폭증**
+1. 부모 프로세스가 fork()
+2. 자식 프로세스가 현재 데이터 기반 새 AOF 생성 
+3. rewrite 중 발생한 write는 rewrite buffer에 저장 
+4. rewrite 완료 시 rewrite buffer를 새 파일에 append 
+5. 기존 파일 교체
 
-- 큰 기존 AOF 파일을 통째로 다시 써야함
-- 디스크 write amplification 심각
-- SSD 수명 문제 발생 가능
+### Redis 7.0 이후 – Multi-part AOF
 
-즉 rewrite 중 부모가 이중(기존 AOF, rewrite buffer)으로 기록하고,
-rewrite 완료 시 rewrite buffer를 새 AOF에 추가로 붙이는 과정에서 추가 I/O가 발생하는 것
-```
-
-멀티 파트 AOF 기능으로 AOF 단일 파일을 다음과 같은 구성으로 분리합니다. 여기서 주요한 차이는 **기존 AOF 파일을 merge하지 않는다**는 점입니다. 즉 7.0 이전에는 rewrite 중 발생한 변경을 rewrite buffer에 모았다가 새 AOF에 “붙이는 과정”이 필요했습니다.
-7.0 이후에는 그걸 별도 INCR 파일에 바로 기록하고, rewrite 완료 시 새 BASE와 병합하지 않는다.(전체 메모리를 scan해서 저장하는 건 같음)
+멀티 파트 AOF 기능으로 AOF 단일 파일을 다음과 같은 구성으로 분리합니다.
 
 1. BASE AOF : rewrite로 생성된 기준 파일
 2. INCREMENTAL AOF : 이후에 write가 append되는 파일들
 3. MANIFEST 파일 : 어떤 AOF 파일들이 유효한지 관리(MANIFEST만 교체하여 쉽게 BASE는 폐기)
 
-**rewrite buffer 병합 단계 제거**
+### 구조적 변화의 핵심
 
-> rewrite 완료 시점에 대량 데이터를 다시 붙이는 단계가 없어졌다는 것
+**7.0 이전:**
+
+```text
+rewrite 중 write
+→ rewrite buffer 저장
+→ rewrite 완료 후 새로운 BASE에 병합
+→ 대량 I/O 발생
+```
+
+**7.0 이후:**
 
 - rewrite 중 변경을 INCR 파일에 직접 기록
 - rewrite 완료 시 새 BASE에 붙이는 단계 없음
 - 마지막 대량 flush 제거
-- 이미 변경은 INCR에 append 되었고 BASE 생성 완료 후 메타데이터 전환만 수행 
+- 이미 변경은 INCR에 append 되었고 BASE 생성 완료 후 메타데이터 전환만 수행
 - → I/O spike 완화(쓰기 패턴 균등)
+
+즉,
+```text
+rewrite 중 write
+→ INCR 파일에 즉시 append
+→ rewrite 완료 후 manifest 교체
+→ 병합 단계 없음
+```
 
 그럼 rewrite buffer는 완전히 없나?
 
 - 내부적으로 클라이언트 write를 처리하는 AOF 버퍼는 존재
 - 하지만 “rewrite 전용 병합 버퍼” 개념은 사라졌다 
 
-## 스냅숏 + AOF
+### AOF 무결성 이슈
+
+AOF 재작성 중 중간에 실패해도 문제가 없도록 현재 사용 중인 AOF파일에 지속적으로 쓰기 작업 명령이 추가됩니다.
+
+하지만 파일의 데이터 손실이 확인되면 기본적으로 많은 데이터를 불러오지만 무결성을 위해 오류를 만들어 서버가 실행되지 않도록 할 수 있습니다.
+
+- 파일이 truncate된 경우 복구 여부는 aof-load-truncated 설정으로 결정
+- 기본값: yes (가능한 부분까지 복구)
+- no 설정 시 서버 시작 실패
+- 복구 도구: redis-check-aof(매개변수는 파일은 형식은 정상이지만 중간에 잘려있는 데이터가 있을 때 유효)
+
+### 관리형 서비스 주의(AWS ElastiCache)
+
+- 노드 교체 시 AOF 파일은 유지되지 않을 수 있음 
+- AOF에만 의존한 복구 전략은 위험 
+- snapshot 기반 백업 정책 확인 필수
+
+## RDB + AOF 혼합 전략
 
 AOF가 활성화되어 있으면:
 
