@@ -70,7 +70,7 @@ fork() 이후 부모와 자식은 메모리 페이지를 공유합니다. 따라
 RDB를 생성할 때는 리스크가 있으므로 아래의 내용을 확인합니다.
 
 1. 스냅숏을 사용하기 위한 메모리가 충분한지 확인
-2. 문제없이 레플리카에서 스냅숏을 가져올 수 있는지 확인
+2. replica가 full resync 시 RDB를 전송받을 수 있는지 확인
 3. 서비스 지장이 없는 시간에 스냅숏을 생성하는지
 
 ### 1. fork latency
@@ -86,8 +86,6 @@ RDB를 생성할 때는 리스크가 있으므로 아래의 내용을 확인합�
 - RDB 수행 중 write가 많으면 OOM 위험
 - 특히 maxmemory 근접 환경에서 치명적
 
-따라서 백업할때 아래의 사항을 확인해야 합니다.
-
 ### 3. 디스크 I/O burst
 
 - 대용량 RDB 파일을 한 번에 write 
@@ -100,29 +98,25 @@ RDB를 생성할 때는 리스크가 있으므로 아래의 내용을 확인합�
 rdb-save-incremental-fsync yes
 ```
 
-### Cow(Copy-on-Write) 방식
-
-> 데이터를 직접 수정하지 않고, 변경이 발생하는 시점에 기존 데이터를 복사한 뒤 수정하는 방식이다. 
-
-- 기존 블록을 건드리지 않음
-- 수정 시 새 블록을 생성
-- 포인터만 새 블록으로 전환
-
-```text
-Block A (유지)
-Block A' (수정본 생성)
-→ 메타데이터가 A'를 가리킴
-```
-
 ## AOF
 
 > AOF는 Redis write 명령을 Redis protocol 형식으로 로그에 기록하는 방식이다
+> - 일부 명령은 rewrite 시 하나의 최종 상태 명령으로 축약된다 (예: 여러 INCR → 하나의 SET)
+> - 논리 로그이기 때문
 
 - 논리적 명령 기록 (물리적 redo log 아님)
 - append-only 구조 
 - 재시작 시 순차 replay
 
 스냅숏과 비슷하게 AOF 파일을 재작성할 때 4MB마다 디스크로 플러시 할 수 있습니다.(aof-rewrite-incremental-fsync로 제어)
+
+| 옵션       | 의미              | 손실 가능성 |
+| -------- | --------------- | ------ |
+| always   | 매 write마다 fsync | 거의 없음  |
+| everysec | 1초 주기           | 최대 1초  |
+| no       | OS 위임           | 수 초    |
+
+실무에서는 대부분 everysec를 사용한다.
 
 ### AOF Rewrite (7.0 이전)
 
@@ -131,8 +125,8 @@ AOF를 이해하기 위해 7.0 이전의 재작성 처리 흐름은 다음과 �
 동작 흐름:
 
 1. 부모 프로세스가 fork()
-2. 자식 프로세스가 현재 데이터 기반 새 AOF 생성 
-3. rewrite 중 발생한 write는 rewrite buffer에 저장 
+2. 자식 프로세스가 현재 데이터 기반 새 AOF 생성
+3. rewrite 중 부모는 기존 AOF와 rewrite buffer 두 군데에 기록
 4. rewrite 완료 시 rewrite buffer를 새 파일에 append 
 5. 기존 파일 교체
 
@@ -161,6 +155,7 @@ rewrite 중 write
 - rewrite 완료 시 새 BASE에 붙이는 단계 없음
 - 마지막 대량 flush 제거
 - 이미 변경은 INCR에 append 되었고 BASE 생성 완료 후 메타데이터 전환만 수행
+- 서버 재시작 시에는 BASE → INCR 순서로 순차 replay 한다.
 - → I/O spike 완화(쓰기 패턴 균등)
 
 즉,
@@ -178,9 +173,9 @@ rewrite 중 write
 
 ### AOF 무결성 이슈
 
-AOF 재작성 중 중간에 실패해도 문제가 없도록 현재 사용 중인 AOF파일에 지속적으로 쓰기 작업 명령이 추가됩니다.
+AOF 재작성 중 중간에 실패해도 문제가 없도록 현재 사용 중인 AOF파일에 지속적으로 쓰기 작업 명령이 추가됩니다. rewrite가 실패하더라도 기존 AOF는 유지되며, 성공 시에만 atomic rename으로 원자적으로 교체된다.
 
-하지만 파일의 데이터 손실이 확인되면 기본적으로 많은 데이터를 불러오지만 무결성을 위해 오류를 만들어 서버가 실행되지 않도록 할 수 있습니다.
+하지만 파일의 데이터 손실이 확인되면,
 
 - 파일이 truncate된 경우 복구 여부는 aof-load-truncated 설정으로 결정
 - 기본값: yes (가능한 부분까지 복구)
@@ -197,13 +192,8 @@ AOF 재작성 중 중간에 실패해도 문제가 없도록 현재 사용 중�
 
 AOF가 활성화되어 있으면:
 
-- Redis restart 시 AOF 파일을 우선 사용 (AOF가 더 일관성 유지)
-- RDB 파일은 무시됨
-
-옵션:
-```text
-aof-use-rdb-preamble yes
-```
+- AOF 파일이 존재하면 RDB는 로딩하지 않습니다.(AOF가 더 일관성 유지)
+- 단, aof-use-rdb-preamble yes면 AOF 파일 내부에 RDB가 포함될 수 있습니다.
 
 이 경우:
 - AOF 파일 앞부분은 RDB snapshot 형식 
@@ -226,7 +216,7 @@ aof-use-rdb-preamble yes
 
 ## 실제 장애 원인 Top 3
 
-1. fork latency spike
+1. fork latency spike(대용량 Redis에서 persistence 장애의 1순위 원인은 fork latency다.)
 2. CoW 메모리 폭증 → OOM
 3. 디스크 I/O saturation
 
