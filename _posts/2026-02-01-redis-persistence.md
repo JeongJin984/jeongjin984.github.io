@@ -1,7 +1,7 @@
 ---
 title: redis 영속성
 description: >-
-  홈서버에 k8s 구성하기 1편
+  redis의 데이터 영속성 관리
 author: jay
 date: 2026-02-01 20:55:00 +0800
 categories: [Study, Redis]
