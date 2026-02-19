@@ -1,7 +1,7 @@
 ---
 title: Redis 캐시 읽기 관점 아키텍처
 description: >-
-  redis의 데이터 영속성 관리
+  Redis 캐시 읽기 관점 아키텍처 설계
 author: jay
 date: 2026-02-02 20:55:00 +0800
 categories: [Study, Redis]
@@ -12,13 +12,13 @@ media_subpath: ''
 
 # Redis 읽기 캐시 안정화 아키텍처
 
-## 문제 정의
+## 1. 문제 정의
 
-### Read Path의 특성
+### 1.1 Read Path의 특성
 
 읽기(Read)는 대개 QPS가 높고(팬아웃), 지연에 민감합니다.
 
-### Cache Miss 비용 구조
+### 1.2 Cache Miss 비용 구조
 
 Cache Miss는 단순히 DB 한번 더 조회가 아니다.
 
@@ -29,7 +29,7 @@ Cache Miss는 단순히 DB 한번 더 조회가 아니다.
 3. 동시성 증폭 : 같은 TTL의 여러개의 캐시가 miss날 경우 동시 요청, QPS가 증폭될 수 있다.
 4. Tail Latency 증폭 : miss는 평균지연보단 p99를 비선형적으로 끌어올림(서비스 품질 저하)
 
-### Cache stampede의 정의 및 발생 조건
+### 1.3 Cache stampede의 정의 및 발생 조건
 
 > Cache Stampede는 특정 캐시 키가 TTL 만료된 순간, 다수의 클라이언트 요청이 동시에 캐시 미스를 일으켜 백엔드(DB, 서비스 계층)에 집중적인 부하를 발생시키는 현상
 
@@ -38,7 +38,7 @@ Cache Miss는 단순히 DB 한번 더 조회가 아니다.
 - 300초 후 대량의 키가 동시에 만료
 - 순간적으로 DB/백엔드에 트래픽이 폭증
 
-### Hot Key 스탬피드
+### 1.4 Hot Key 스탬피드
 
 > 키 1개가 다 빨아먹고 DB로 새는 순간 터짐
 
@@ -48,16 +48,16 @@ Cache Miss는 단순히 DB 한번 더 조회가 아니다.
   - 핫키는 “만료 순간”에 동시 미스가 대량 발생
   - TTL 지터는 “동시 만료”를 줄여도, 핫키 1개는 여전히 만료 이벤트가 큼
 
-## 기본 읽기 패턴
+## 2. 기본 읽기 패턴
 
-### Lazy Loading (Cache Aside)
+### 2.1 Lazy Loading (Cache Aside)
 
 > 요청 → Redis GET → miss면 DB 조회 → Redis SET → 응답
 
 - 장점 : 단순, 운영 편함, RDBMS가 소스 오브 트루스
 - 단점: miss 시 DB 부하 급증(스탬피드), 만료 순간 폭발, “Hot Key”에 취약
 
-### Read-Through
+### 2.2 Read-Through
 
 동작 자체는 지연 로딩과 같지만 요청 → 캐시 계층이 miss면 내부적으로 DB에서 채움
 
@@ -65,7 +65,7 @@ Cache Miss는 단순히 DB 한번 더 조회가 아니다.
 - 단점: 구현/운영 복잡(라이브러리/프록시 필요), 장애 격리 어려움
 
 
-## Cache Stampede 성숙도 모델
+## 3. Cache Stampede 성숙도 모델
 
 아래는 Cache Stampede에 대해 동시성을 제어하는 성숙도의 단계이다.
 
@@ -77,7 +77,7 @@ Cache Miss는 단순히 DB 한번 더 조회가 아니다.
 | Level 3 | Soft TTL + SWR        | 응답 안정화      |
 | Level 4 | PER                   | 만료 집중 분산 |
 
-## TTL Only
+## 4. TTL Only
 
 > 고정적인 TTL을 사용하는 구조로 고트래픽 환경에서 장애 유발이 쉽다.
 
@@ -94,7 +94,7 @@ Cache Miss는 단순히 DB 한번 더 조회가 아니다.
   - DB QPS 순간 급증 
   - p99 급등
 
-## TTL Jitter
+## 5. TTL Jitter
 
 > TTL(Random Jitter)는 캐시 키의 만료 시간을 고정값이 아니라 무작위 오프셋을 포함한 값으로 설정하는 기법
 > - TTL Jitter는 “완화” 전략일 뿐, 해결책은 아니다.
@@ -123,12 +123,12 @@ Cache Miss는 단순히 DB 한번 더 조회가 아니다.
 - 특정 시간대에 spike가 보이면 Jitter 범위 재조정 
 - 캐시 히트율이 과도하게 흔들리면 Jitter 과다 가능성
 
-## Mutex / Single-flight
+## 6. Mutex / Single-flight
 
 > Mutex / Single-flight는 평균 hit ratio를 올리는 기술이 아니다. latency를 줄이는 기술도 아니다
 > - 동일 키에 대한 동시 갱신을 1회로 수렴시키는 동시성 제어 장치다
 
-### single-flight
+### 6.1 single-flight
 
 특정 하나의 키(Hot Key)에 대해 동시에 miss가 폭발하는 것은 Jitter로는 해결이 불가하다.
 
@@ -181,7 +181,7 @@ Mutex / Single-flight는 이를 직접 통제하는 1차 방어선이다.
 **이에 대해 TTL의 refresh-lock 키(SETNX)를 활용할 수 있다.(분산락은 과도하게 복잡)**
 - 갱신은 “정확성”보다 “중복 억제”가 목적이기 때문입니다.
 
-### Redis 기반 Mutex
+### 6.2 Redis 기반 Mutex
 
 > Redis의 SETNX를 활용한 refresh lock.
 > - SET refresh_lock:{key} 1 NX EX 10
@@ -201,7 +201,7 @@ Mutex / Single-flight는 이를 직접 통제하는 1차 방어선이다.
 5. 갱신 완료 후 lock 자연 만료
 ```
 
-### 대기 전략 비교
+### 6.3 대기 전략 비교
 
 **Blocking 방식**
 
@@ -218,7 +218,7 @@ Mutex / Single-flight는 이를 직접 통제하는 1차 방어선이다.
 - latency 안정
 - 약간의 stale 허용
 
-### Lock TTL 설계 기준
+### 6.4 Lock TTL 설계 기준
 
 > Lock TTL ≈ (평균 DB 응답시간 × 2~3)
 > - 대개 5~30초 범위.
@@ -231,7 +231,7 @@ Mutex / Single-flight는 이를 직접 통제하는 1차 방어선이다.
   - 갱신 실패 시 장시간 갱신 불가 
   - stale 지속
 
-### 과도한 분산락 설계의 문제
+### 6.5 과도한 분산락 설계의 문제
 
 > Cache refresh 락의 목적은 정확성(consistency) 보장이 아니라 **중복 갱신 억제(deduplication)**다.
 > 
@@ -255,7 +255,7 @@ Mutex / Single-flight는 이를 직접 통제하는 1차 방어선이다.
 - 짧은 TTL
 - 실패 시 무시
 
-## Soft TTL + SWR
+## 7. Soft TTL + SWR
 
 아래와 같은 상황에서는 Mutex가 또 다른 병목이 될 수 있다. 
 - stale 구간 QPS = 20,000 
@@ -264,7 +264,7 @@ Mutex / Single-flight는 이를 직접 통제하는 1차 방어선이다.
 
 따라서 Soft TTL, PER 등과 결합하는(혹은 lock 시도 빈도 자체를 줄이는) 등의 추가적인 설계가 필요하다
 
-### Stale-While-Revalidate (SWR)
+### 7.1 Stale-While-Revalidate (SWR)
 
 > 데이터가 soft TTL을 지나 stale 상태가 되더라도 즉시 응답을 제공하고, 동시에 **백그라운드에서 재검증/재갱신(revalidate)**을 수행 
 
@@ -291,7 +291,7 @@ Soft TTL 예시:
 ```
 단 json으로 저장하면 메모리 사용량 증가하므로 대규모 키에서는 그 크기를 고려해야한다.
 
-## Probabilistic Early Refresh
+## 8. Probabilistic Early Refresh
 
 > TTL이 끝나는 시점에 한 번에 갱신하지 말고, 만료 직전 구간에서 “일부 요청만” 확률적으로 먼저 갱신
 > - PER는 “TTL Jitter의 고급형”이라고 보면 정확하다.
@@ -307,7 +307,7 @@ Soft TTL 예시:
   - 이론적으로는 “예상보다 늦게 갱신”될 수 있음
   - 트래픽이 매우 낮으면 갱신이 지연될 수 있음(Hard TTL은 반드시 별도로 둬야 함)
 
-### 확률 함수 설계 방식
+### 8.1 확률 함수 설계 방식
 
 **1. 선형 증가**
 ```text
@@ -326,7 +326,7 @@ refresh if now > expiry - beta * TTL * ln(U)
 - beta = 조정 파라미터
 - 트래픽이 많을수록 자연스럽게 조기 갱신 발생
 
-### 그래도 “락/싱글플라이트”는 필수
+### 8.2 그래도 “락/싱글플라이트”는 필수
 
 > PER은 트리거 시도를 줄이는 장치지, 중복 갱신을 막는 장치가 아니다. 
 
