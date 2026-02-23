@@ -243,27 +243,11 @@ MySQL Named Lock은 생명 주기가 세션 단위(락의 생명주기는 “Con
 
 > Redisson은 Redis를 대상으로 하는 고수준 Java 클라이언트다. 단순히 GET/SET만 하는 클라이언트가 아니라, Redis 위에 다음을 “프리미티브”로 제공한다.
 
+- 내부적으로는 Redis의 키 + TTL(리스) 기반 락 패턴을 사용
 - 분산 락/동기화: RLock, FairLock, ReadWriteLock, Semaphore, CountDownLatch 등
 - 분산 컬렉션: RMap, RSet, RList, RQueue, RBlockingQueue …
 - 원자 연산/카운터: RAtomicLong 등
 - (옵션) 캐시/분산 객체/Executor 등: 서비스가 커질수록 사용 범위가 넓어짐
-
-### 6.1 Redisson 분산락 핵심: RLock의 동작과 Watchdog
-
-> 기본 RLock은 “단일 Redis 기반 락”
-
-```java
-RLock lock = redisson.getLock("order:123");
-lock.lock(); // leaseTime 미지정
-try {
-  // critical section
-} finally {
-  lock.unlock();
-}
-```
-
-- 내부적으로는 Redis의 키 + TTL(리스) 기반 락 패턴을 사용하고
-- 해제는 소유자 토큰(value) 검증 후 삭제를 원자적으로 수행(Lua)하는 방식으로 안전성을 확보한다(“남의 락 삭제 방지”는 Redis 분산락의 기본 안전장치).
 
 **Watchdog(자동 연장)이 Redisson의 차별점**
 
@@ -279,6 +263,41 @@ try {
 - lock(10, SECONDS)처럼 leaseTime을 직접 주면 watchdog는 기본적으로 필요 없어지고, TTL은 고정된다(작업이 더 길어지면 락이 먼저 만료될 수 있음)
 - 이때는 실행 시간 상한을 정확히 아는 작업에만 적합하다. (watchdog의 의미 자체가 “실행시간 예측 어려움” 대응)
 
+### 6.1 Redisson 분산락 핵심: RLock의 동작
+
+> RLock은 Redisson이 제공하는 Redis 기반 분산 Reentrant Lock
+
+- 분산: 여러 JVM/서버 인스턴스에서 같은 Redis 키를 통해 동기화
+- Reentrant(재진입): 같은 스레드(정확히는 Redisson이 식별하는 “락 소유자”)가 이미 잡은 락을 다시 잡을 수 있음(hold count 증가)
+- 자동 만료(TTL): 락 키에 TTL이 붙어 “영구 락”을 방지
+- 대기 방식: 기본 RLock은 보통 PUB/SUB 기반 대기 + 재시도로 불필요한 폴링을 줄임(스핀락은 RSpinLock)
+
+```java
+RLock lock = redisson.getLock("order:123");
+lock.lock(); // leaseTime 미지정
+try {
+  // critical section
+} finally {
+  lock.unlock();
+}
+```
+아래의 과정을 통해 동작하며
+
+1. 락 획득
+   - Redis에 “락 키”를 만들고(혹은 갱신하고) 소유자를 기록
+   - 이미 잡혀 있으면:
+     - tryLock(waitTime, ...)이면 waitTime까지 대기 후 실패 가능
+     - lock()이면 계속 대기(작업 시간이 leaseTime을 초과하면 락이 풀린 상태에서 임계구역이 계속 실행될 수 있음)
+2. 락 유지(leaseTime / watchdog)
+   - leaseTime을 지정하면: 그 시간만큼만 TTL이 설정되고 그 이후 자동 해제(연장 없음)
+   - leaseTime을 미지정(예: lock.lock())하면: **watchdog(자동 연장)**이 락 TTL을 주기적으로 연장
+     - 프로세스가 살아있는 동안 락이 유지되도록 설계됨
+     - 프로세스가 죽으면 연장이 멈추고 TTL 만료로 해제
+3. 락 해제
+   - 오직 “현재 소유자”만 unlock() 가능
+   - hold count가 0이 되면 실제로 락 키가 제거(또는 해제 상태로 전환)
+
+
 ### 6.3 Lua 스크립트를 통한 락 해제 원자성 확보
 
 Redisson의 내부 해제 로직 개념적으로 아래의 형태를 띈다.
@@ -293,6 +312,7 @@ end
 
 - GET + 비교 + DEL이 하나의 atomic operation
 - 중간에 다른 클라이언트 개입 불가
+- 해제는 소유자 토큰(value) 검증 후 삭제를 원자적으로 수행(Lua)하는 방식으로 안전성을 확보한다(“남의 락 삭제 방지”는 Redis 분산락의 기본 안전장치)
 
 단순 DEL은 아래의 시나리오에서 터질 수 있다.
 
