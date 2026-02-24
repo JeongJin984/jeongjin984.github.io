@@ -246,8 +246,6 @@ handle_read(fd) {
 
 > read 핸들러 안에서, 애플리케이션이 직접 epoll_ctl(EPOLL_CTL_MOD, ...)을 호출합니다.
 
-3. 
-
 ## 7. HTTP 상태 머신 진입
 
 이제 바이트 스트림이 HTTP 모듈로 전달됨.
