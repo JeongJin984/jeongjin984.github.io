@@ -165,8 +165,14 @@ NGINX worker는 다음 상태로 대기 중: epoll_wait(epfd, events, ...)
 > - epoll_wait()를 통해 커널의 ready list를 가져옵니다.
 
 epoll의 내부 구조:
-- interest list : 우리가 감시하겠다고 등록한 FD 목록
-- ready list : 우리가 감시하겠다고 등록한 FD 목록
+- interest list : 커널에 등록된 “이 FD에서 이런 이벤트가 발생하면 알려줘” 라는 감시 대상 목록.
+  - epoll_ctl(EPOLL_CTL_ADD)로 등록
+  - 파일 디스크립터(FD) 단위
+  - EPOLLIN (읽기 가능), EPOLLOUT (쓰기 가능), EPOLLET (edge-triggered)
+- ready list : 현재 시점에 실제로 이벤트가 발생한 FD 목록.
+  - epoll_wait() 호출 시 반환됨 
+  - 커널이 interest list 중 “조건을 만족한 FD”를 골라 사용자 공간에 전달 
+  - 매 루프마다 동적으로 생성
 
 ```text
 int n = epoll_wait(epfd, events, maxevents, timeout);
