@@ -1,5 +1,5 @@
 ---
-title: 웹서버 nginx 와 apache
+title: 웹서버 nginx
 description: >-
   apache와 nginx에 대해서
 author: jay
