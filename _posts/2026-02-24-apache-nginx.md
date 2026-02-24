@@ -161,18 +161,28 @@ NGINX worker는 다음 상태로 대기 중: epoll_wait(epfd, events, ...)
 
 ### 5.1 worker 핵심 루프
 
+> 이벤트 루프는 커널로부터 “어떤 FD가 준비되었는지” 어떻게 통지받는가?
+> - epoll_wait()를 통해 커널의 ready list를 가져옵니다.
+
+epoll의 내부 구조:
+- interest list : 우리가 감시하겠다고 등록한 FD 목록
+- ready list : 우리가 감시하겠다고 등록한 FD 목록
+
 ```text
-for (;;) {
-    ngx_process_events_and_timers(...);
-}
-```
+int n = epoll_wait(epfd, events, maxevents, timeout);
+``` 
 
-1. epoll_wait() 호출 
-2. ready fd 목록 반환 
-3. 각 fd에 연결된 ngx_event_t를 꺼냄 
-4. event->handler(event) 호출
+이 함수가 하는 일
+1. ready list가 비어있으면 → sleep
+2. 네트워크 이벤트 발생
+3. 커널이 해당 FD를 ready list에 추가
+4. epoll_wait()가 깨어남
+5. 준비된 FD 배열을 user space로 복사
+6. n(이벤트 개수) 반환
+7. 각 fd에 연결된 ngx_event_t를 꺼냄
+8. event->handler(event) 호출
 
-### 5.2 왜 이렇게 설계했는가?
+### 5.3 왜 이렇게 설계했는가?
 
 각 단계마다 handler가 바뀐다:
 ```text
@@ -203,6 +213,40 @@ Nginx에는 서로 다른 레벨의 핸들러가 있다.
 
 1. Connection / Event 레벨 핸들러(I/O 상태 머신) : 소켓 I/O 상태에 따라 바뀌는 함수들:
 2. HTTP Phase 핸들러 : 요청이 완성되면 실행되는 phase engine 기반 핸들러 체인(각 phase에는 여러 모듈이 핸들러를 등록한다.)
+
+핸들러 호출에 따라 FD readiness 상태 변화(커널 상태)가 발생하고 그 변화를 다음 epoll_wait()에서 반영하는 것이다.
+
+### 6.2 핸들러 호출 흐름
+
+> 커널이 receive 소켓의 readiness가 변경하면 EPOLLIN이 발생하고 이에 따라 read 핸들러를 이벤트 루프가 호출한다. 
+> - read 핸들러가 처리 과정에서 EPOLLOUT을 interest list에 등록해서 다음 epoll_wait에서 write 핸들러를 호출
+
+정확히는
+1. 커널이 소켓 recv buffer에 데이터 적재
+2. 해당 FD가 readable 상태가 됨
+3. (interest list에 EPOLLIN이 등록돼 있다면)
+4. ready list에 추가
+5. epoll_wait()가 반환
+6. 이벤트 루프가 read 핸들러 호출(여기서 EPOLLOUT을 interest list에 등록)
+
+그리고
+
+1. read 핸들러가 write가 필요하다고 판단하면 EPOLLOUT을 interest list에 등록한다.
+2. 그 FD가 writable 상태라면 다음 epoll_wait에서 EPOLLOUT이 반환된다.
+
+```text
+handle_read(fd) {
+    n = read(fd, buf, ...);
+    append_to_peer_write_buffer(buf, n);
+
+    if (peer_has_pending_write)
+        enable_epollout(peer_fd);
+}
+```
+
+> read 핸들러 안에서, 애플리케이션이 직접 epoll_ctl(EPOLL_CTL_MOD, ...)을 호출합니다.
+
+3. 
 
 ## 7. HTTP 상태 머신 진입
 
