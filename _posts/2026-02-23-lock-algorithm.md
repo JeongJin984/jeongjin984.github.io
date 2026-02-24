@@ -3,9 +3,9 @@ title: 데이터 무결성 관점에서의 lock 아키텍처 설계
 description: >-
   lock 아키텍처 설계
 author: jay
-date: 2026-02-02 20:55:00 +0800
-categories: [Study, Redis]
-tags: [redis, study]
+date: 2026-02-03 20:55:00 +0800
+categories: [Study, Data]
+tags: [data, study]
 pin: false
 media_subpath: ''
 ---
